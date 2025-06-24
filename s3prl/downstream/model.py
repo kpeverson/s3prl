@@ -76,6 +76,32 @@ class MeanPooling(nn.Module):
 
         return torch.stack(agg_vec_list), torch.ones(len(feature_BxTxH)).long()
 
+class SelfAttentionCLSPooling(nn.Module):
+    ''' Self Attention Pooling consisting of a single multi-head self-attention layer and a CLS token '''
+
+    def __init__(self, input_dim, **kwargs):
+        super(SelfAttentionCLSPooling, self).__init__()
+        self.cls_embed = nn.Parameter(
+            torch.FloatTensor(input_dim).uniform_()
+        )
+        self.mha = nn.MultiheadAttention(
+            input_dim, 1, batch_first=True
+        )
+
+    def forward(self, feature_BxTxH, att_mask):
+        # append cls embedding to beginning
+        feature_BxTxH = torch.cat(
+            [
+                self.cls_embed.expand(feature_BxTxH.size(0), 1, -1),
+                feature_BxTxH,
+            ], dim=1
+        )
+        # pass thru mha layer
+        feature = self.mha(
+            feature_BxTxH, feature_BxTxH, feature_BxTxH,
+        )[0][:, 0, :]
+
+        return feature, torch.ones(len(feature_BxTxH)).long()
 
 class AttentivePooling(nn.Module):
     ''' Attentive Pooling module incoporate attention mask'''

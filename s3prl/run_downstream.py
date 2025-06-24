@@ -26,7 +26,7 @@ def get_downstream_args():
 
     # distributed training
     parser.add_argument('--backend', default='nccl', help='The backend for distributed training')
-    parser.add_argument('--local_rank', type=int,
+    parser.add_argument('--local-rank', type=int,
                         help=f'The GPU id this process should use while distributed training. \
                                None when not launched by torch.distributed.launch')
 

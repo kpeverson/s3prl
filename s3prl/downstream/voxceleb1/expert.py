@@ -43,11 +43,12 @@ class DownstreamExpert(nn.Module):
         self.expdir = expdir
 
         root_dir = Path(self.datarc['file_path'])
+        return_glottal = self.datarc.get('return_glottal', False)
 
-        self.train_dataset = SpeakerClassifiDataset('train', root_dir, self.datarc['meta_data'], self.datarc['max_timestep'])
-        self.dev_dataset = SpeakerClassifiDataset('dev', root_dir, self.datarc['meta_data'])
-        self.test_dataset = SpeakerClassifiDataset('test', root_dir, self.datarc['meta_data'])
-        
+        self.train_dataset = SpeakerClassifiDataset('train', root_dir, self.datarc['meta_data'], self.datarc['max_timestep'], return_glottal=return_glottal)
+        self.dev_dataset = SpeakerClassifiDataset('dev', root_dir, self.datarc['meta_data'], return_glottal=return_glottal)
+        self.test_dataset = SpeakerClassifiDataset('test', root_dir, self.datarc['meta_data'], return_glottal=return_glottal)
+
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})
         self.projector = nn.Linear(upstream_dim, self.modelrc['projector_dim'])

@@ -82,15 +82,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--seed', default=19941227)
     parser.add_argument('-r', '--root', default="../../librispeech/voxceleb2/dev/wav")
-    parser.add_argument('-o', "--output_dir", default="../../librispeech/dev_data")
+    parser.add_argument('-o', "--output_dir", default="../../sv_voxceleb1/dev_data")
     parser.add_argument('-n',  '--speaker_num', default=40)
     parser.add_argument('-p',  '--sample_pair', default=20000)
     args = parser.parse_args()
 
     random.seed(args.seed)
     train_speakers, dev_speakers = collect_speaker_ids(args.root, args.speaker_num)
-    construct_dev_speaker_id_txt(dev_speakers, "./downstream/sv_voxceleb1/dev_meta_data/dev_meta_speaker_ids.txt")
-    wav_list = sample_wavs_and_dump_txt(args.root, dev_speakers, args.sample_pair, "./downstream/sv_voxceleb1/dev_meta_data/dev_meta_data_voxceleb2.txt")
+    construct_dev_speaker_id_txt(dev_speakers, "/gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/sv_voxceleb1/dev_meta_data/dev_meta_speaker_ids.txt")
+    wav_list = sample_wavs_and_dump_txt(args.root, dev_speakers, args.sample_pair, "/gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/sv_voxceleb1/dev_meta_data/dev_meta_data_voxceleb2.txt")
     
     root = Path(args.root)
 

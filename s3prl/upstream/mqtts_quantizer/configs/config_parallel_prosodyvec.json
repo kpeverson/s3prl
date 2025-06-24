@@ -1,0 +1,81 @@
+{
+    "resblock": "1",
+    "num_gpus": 1,
+    "batch_size": 32,
+    "learning_rate": 0.0002,
+    "adam_b1": 0.5,
+    "adam_b2": 0.9,
+    "lr_decay": 0.98,
+    "seed": 1234,
+
+    "upsample_rates": [8,8,2,2],
+    "upsample_kernel_sizes": [16,16,4,4],
+    "upsample_initial_channel": 512,
+    "resblock_kernel_sizes": [3,7,11],
+    "resblock_dilation_sizes": [[1,3,5], [1,3,5], [1,3,5]],
+    "encoder_input_dim": 32,
+
+    "segment_size": 8192,
+    "num_mels": 80,
+    "num_freq": 1025,
+    "n_fft": 1024,
+    "hop_size": 200,
+    "win_size": 800,
+
+    "sampling_rate": 16000,
+
+    "n_code_groups": 4,
+    "n_codes": 160,
+
+    "n_glottal_code_groups": 4,
+    "n_glottal_codes": 100,
+    "glottal_encoder_dim": 768,
+    "audio2_mode": "glottal_lpc",
+
+    "fmin": 0,
+    "fmax": 8000,
+    "fmax_for_loss": null,
+
+    "prosodyvec": {
+        "conv_feature_layers": "[(512,10,5)] + [(512,3,2)] * 4 + [(512,2,2)] * 2",
+        "extractor_mode": "default",
+        "label_rate": 50,
+        "encoder_embed_dim": 768,
+        "mask_prob": 0.0,
+        "mask_selection": "static",
+        "mask_other": 0.0,
+        "mask_length": 0,
+        "no_mask_overlap": true,
+        "mask_min_space": 1,
+        "mask_channel_prob": 0.0,
+        "mask_channel_selection": "static",
+        "mask_channel_other": 0.0,
+        "mask_channel_length": 0,
+        "no_mask_channel_overlap": true,
+        "mask_channel_min_space": 1,
+        "dropout_input": 0.1,
+        "dropout_features": 0.1,
+        "dropout": 0.1,
+        "attention_dropout": 0.1,
+        "conv_pos": 128,
+        "conv_pos_groups": 16,
+        "encoder_ffn_embed_dim": 3072,
+        "encoder_attention_heads": 12,
+        "activation_dropout": 0.0,
+        "activation_fn": "gelu",
+        "layer_norm_first": false,
+        "encoder_layerdrop": 0.05,
+        "encoder_layers": 12,
+        "interpolation_upsample_factor": 1.25,
+        "interpolation_mode": "linear",
+        "interpolation_kernel_size": 3
+    },
+
+    "num_workers": 12,
+
+    "dist_config": {
+        "dist_backend": "nccl",
+        "dist_url": "tcp://localhost:54321",
+        "world_size": 1
+    }
+}

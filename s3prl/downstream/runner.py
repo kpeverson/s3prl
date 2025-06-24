@@ -95,7 +95,6 @@ class Runner():
         self.downstream = self._get_downstream()
         self.all_entries = [self.upstream, self.featurizer, self.downstream]
 
-
     def _load_weight(self, model, name):
         init_weight = self.init_ckpt.get(name)
         if init_weight:
