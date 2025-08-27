@@ -13,6 +13,7 @@ from torch.nn.utils.rnn import pad_sequence
 from ..interfaces import UpstreamBase
 from .extracter import get_extracter
 from .preprocessor import get_preprocessor
+from .prosody_extractor import get_prosody_extractor
 
 SAMPLE_RATE = 16000
 
@@ -35,6 +36,11 @@ class UpstreamExpert(UpstreamBase):
         if "kaldi" in self.config:
             self.extracter, self.output_dim, frame_shift = get_extracter(self.config)
             self.downsample_rate = round(frame_shift * SAMPLE_RATE / 1000)
+        elif "prosody" in self.config:
+            self.extracter = get_prosody_extractor(self.config)
+            self.downsample_rate = round(
+                SAMPLE_RATE / self.config["prosody"]["feat_rate"]
+            )
         else:
             self.extracter, self.output_dim, _ = get_preprocessor(
                 self.config, process_input_only=True
@@ -65,10 +71,18 @@ class UpstreamExpert(UpstreamBase):
         feat_lengths = [round(l * ratio) for l in wav_lengths]
         feats = [f[:l] for f, l in zip(feats, feat_lengths)]
         return feats
+    
+    def _prosody_extractor_forward(self, wavs):
+        feats = []
+        for wav in wavs:
+            feats.append(self.extracter(wav))
+        return feats
 
     def forward(self, wavs):
         if "kaldi" in self.config:
             feats = self._extractor_forward(wavs)
+        elif "prosody" in self.config:
+            feats = self._prosody_extractor_forward(wavs)
         else:
             feats = self._preprocessor_forward(wavs)
 

@@ -151,7 +151,9 @@ class OnlinePreprocessor(torch.nn.Module):
         # wavs: (*, channel_size, max_len)
         # feat_list, mam_list: [{feat_type: 'mfcc', channel: 0, log: False, delta: 2, cmvn: 'True'}, ...]
         # wavs_len: [len1, len2, ...]
-
+        if wavs is not None:
+            print(f"[Preprocessor] input wavs shape {wavs.shape}, device {wavs.device}")
+            exit()
         feat_list = self._check_list(feat_list)
         if wavs is None:
             max_channel_id = max(
@@ -178,14 +180,21 @@ class OnlinePreprocessor(torch.nn.Module):
             ).transpose(-1, -2)
 
         wav = wavs.unsqueeze(2)
+        print(f"wav shape {wav.shape}, device {wav.device}")
         shape = wavs.size()
         complx = self._stft(wavs.reshape(-1, shape[-1]), window=self._window)
         complx = torch.view_as_real(complx)
         complx = complx.reshape(shape[:-1] + complx.shape[-3:])
+        print(f"complx shape {complx.shape}, device {complx.device}")
         # complx: (*, channel_size, feat_dim, max_len, 2)
         linear, phase = self._magphase(complx)
+        print(f"linear shape {linear.shape}, device {linear.device}")
+        print(f"phase shape {phase.shape}, device {phase.device}")
         mel = self._melscale(linear)
+        print(f"mel shape {mel.shape}, device {mel.device}")
         mfcc = self._mfcc_trans(wavs)
+        print(f"mfcc shape {mfcc.shape}, device {mfcc.device}")
+        # exit()
         complx = complx.transpose(-1, -2).reshape(*mfcc.shape[:2], -1, mfcc.size(-1))
         # complx, linear, phase, mel, mfcc: (*, channel_size, feat_dim, max_len)
 

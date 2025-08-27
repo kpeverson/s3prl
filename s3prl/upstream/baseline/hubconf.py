@@ -80,3 +80,19 @@ def linear(*args, **kwargs):
     """
     kwargs["model_config"] = os.path.join(os.path.dirname(__file__), "linear.yaml")
     return baseline_local(*args, **kwargs)
+
+def prosody_feats(*args, **kwargs):
+    """
+    Baseline feature - Prosody features
+    Pitch, Delta Pitch, C1, Periodicity
+    """
+    kwargs["model_config"] = os.path.join(os.path.dirname(__file__), "prosody.yaml")
+    return baseline_local(*args, **kwargs)
+
+def prosody_dummy_feats(*args, **kwargs):
+    """
+    Baseline feature - Dummy Prosody features
+    All zeros (feats will come from h5 file)
+    """
+    kwargs["model_config"] = os.path.join(os.path.dirname(__file__), "prosody_dummy_upstream.yaml")
+    return baseline_local(*args, **kwargs)
