@@ -97,7 +97,7 @@ class TonesDataset(Dataset):
                 x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and \
                     os.path.exists(os.path.join(self.root, f"{x}.ton")) and \
-                    os.path.exists(os.path.join(self.root, f"{x}.wrd")):
+                    os.path.exists(os.path.join(self.root, f"{x}.ala")):
                     if x in EXCLUDE_IDS:
                         # print(f"[TonesDataset] - Excluding {x} from training set")
                         continue
@@ -115,7 +115,7 @@ class TonesDataset(Dataset):
                 x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and \
                     os.path.exists(os.path.join(self.root, f"{x}.ton")) and \
-                    os.path.exists(os.path.join(self.root, f"{x}.wrd")):
+                    os.path.exists(os.path.join(self.root, f"{x}.ala")):
                     if x in EXCLUDE_IDS:
                         # print(f"[TonesDataset] - Excluding {x} from dev set")
                         continue
@@ -133,7 +133,7 @@ class TonesDataset(Dataset):
                 x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and \
                     os.path.exists(os.path.join(self.root, f"{x}.ton")) and \
-                    os.path.exists(os.path.join(self.root, f"{x}.wrd")):
+                    os.path.exists(os.path.join(self.root, f"{x}.ala")):
                     if x in EXCLUDE_IDS:
                         # print(f"[TonesDataset] - Excluding {x} from test set")
                         continue
@@ -143,10 +143,11 @@ class TonesDataset(Dataset):
     
     def get_times_labels(self, dataset):
         all_times_labels = []
+        ala_frame_size = 0.01 # 10ms frame size for .ala files
         for path in dataset:
             times_tones = []
             ton_path = os.path.join(self.root, f"{path}.ton")
-            wrd_path = os.path.join(self.root, f"{path}.wrd")
+            ala_path = os.path.join(self.root, f"{path}.ala")
             with open(ton_path, "r") as f:
                 lines = [line.strip() for line in f.readlines()]
             # filter only lines with 3 columns
@@ -156,22 +157,44 @@ class TonesDataset(Dataset):
                 time, _, ton = line.split()
                 time = float(time)
                 times_tones.append((time, ton))
+            print(f"[TonesDataset] - {path}: times_tones: {times_tones}")
             # load words
             times_labels = []
-            with open(wrd_path, "r") as f:
+            with open(ala_path, "r") as f:
                 lines = [line.strip() for line in f.readlines()]
             # filter only lines with 3 columns
-            lines = [line for line in lines if len(line.split()) == 3]
-            st = 0.0
-            for line in lines:
-                et = float(line.split()[0])
-                tones_in_word = [tt[1] for tt in times_tones if st <= tt[0] <= et]
-                # if "HiF0" in tones_in_word:
-                if any(["*" in ton for ton in tones_in_word]):
+            lines = [line.split() for line in lines if len(line.split()) == 3]
+            lines = [(line[0], int(line[1]), int(line[1])+int(line[2])) for line in lines] # (phoneme, start_idx, end_idx)
+            vowel_idxs = [i for i, line in enumerate(lines) if any([vowel in line[0] for vowel in 'AEIOU'])]
+            for i, vidx in enumerate(vowel_idxs):
+                # st idx
+                if vidx == 0:
+                    st_idx = 0.0
+                elif i!=0 and vowel_idxs[i-1] == vidx-1:
+                    # two adjacent phonemes
+                    st_idx = lines[vidx][1]
+                else:
+                    # standard case - center of previous phoneme
+                    st_idx = (lines[vidx-1][1] + lines[vidx-1][2]) / 2.0
+
+                # et idx
+                if vidx == len(lines) - 1:
+                    et_idx = lines[-1][2]
+                elif i!=len(vowel_idxs)-1 and vowel_idxs[i+1] == vidx+1:
+                    # two adjacent phonemes
+                    et_idx = lines[vidx][2]
+                else:
+                    # standard case - center of following phoneme
+                    et_idx = (lines[vidx+1][1] + lines[vidx+1][2]) / 2.0
+                st = st_idx * ala_frame_size
+                et = et_idx * ala_frame_size
+                tones_in_phone = [tt[1] for tt in times_tones if st <= tt[0] <= et]
+                if any(["*" in ton for ton in tones_in_phone]):
                     times_labels.append((st, et, 1))
                 else:
                     times_labels.append((st, et, 0))
-                st = et
+            #     print(f"[TonesDataset] - {path}: {lines[vidx][0]} from idx {st_idx} {st:.2f}s to idx {et_idx} {et:.2f}s, tones: {tones_in_phone}, label: {times_labels[-1][2]}")
+            # exit()
             all_times_labels.append(times_labels)
         num_breaks = [len(times_labels) for times_labels in all_times_labels]
         print(f"[TonesDataset] - {len(all_times_labels)} files, number of breaks per file, min: {min(num_breaks)}, max: {max(num_breaks)}, avg: {np.mean(num_breaks)}")
