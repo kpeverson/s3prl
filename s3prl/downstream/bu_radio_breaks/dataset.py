@@ -1,3 +1,6 @@
+import atexit
+import signal as sig
+import h5py
 import torch
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
@@ -18,30 +21,41 @@ import glob
 import tqdm
 from pathlib import Path
 
-CACHE_PATH = os.path.join(os.path.dirname(__file__), '.cache/')
+# CACHE_PATH = os.path.join(os.path.dirname(__file__), '.cache/')
+EXCLUDE_IDS = ["data/f3a/labnews/j/radio/f3ajrlp2", "data/f2b/radio/s18/f2bs18p8"]
 
 # BU Radio Corpus break indices classification dataset
 class BreakIdxDataset(Dataset):
-    def __init__(self, mode, corpus_dir, meta_data, max_timestep=None, return_glottal=False, sr=16000, **kwargs):
+    def __init__(self, mode, corpus_dir, meta_data, max_timestep=None, return_glottal=False, sr=16000, h5_path=None, **kwargs):
         self.root = corpus_dir
         self.meta_data = meta_data
         self.split_list = open(self.meta_data, "r").readlines()
         self.max_timestep = max_timestep
         self.sr = sr
 
-        cache_path = os.path.join(CACHE_PATH, f'{mode}.pkl')
-        if os.path.isfile(cache_path):
-            print(f'[BreakIdxDataset] - Loading file paths from {cache_path}')
-            with open(cache_path, 'rb') as cache:
-                self.dataset = pickle.load(cache)
-        else:
-            self.dataset = eval("self.{}".format(mode))
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            with open(cache_path, 'wb') as cache:
-                pickle.dump(self.dataset, cache)
-        print(f'[BreakIdxDataset] - there are {len(self.dataset)} files found')
+        self.h5_path = h5_path
+        self.h5_file = None
+        if self.h5_path is not None:
+            self._register_cleanup()
+
+        # cache_path = os.path.join(CACHE_PATH, f'{mode}.pkl')
+        # if os.path.isfile(cache_path):
+        #     print(f'[BreakIdxDataset] - Loading file paths from {cache_path}')
+        #     with open(cache_path, 'rb') as cache:
+        #         self.dataset = pickle.load(cache)
+        # else:
+        self.dataset = eval("self.{}".format(mode))()
+            # os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            # with open(cache_path, 'wb') as cache:
+            #     pickle.dump(self.dataset, cache)
+        # print(f'[BreakIdxDataset] - there are {len(self.dataset)} files found')
         # self.dataset = dataset
         self.times_labels = self.get_times_labels(self.dataset)
+        all_labels = {i: 0 for i in range(5)}  # Initialize all labels to 0
+        for tls in self.times_labels:
+            for t, l in tls:
+                all_labels[l] += 1
+        print(f"[BreakIdxDataset] - labels distribution: {all_labels}")
 
         self.return_glottal = return_glottal
         if return_glottal:
@@ -52,15 +66,39 @@ class BreakIdxDataset(Dataset):
             self.energy_threshold = kwargs.get("energy_threshold", 1e-4)
             self.glottal_lpf_cutoff = kwargs.get("glottal_lpf_cutoff", 1000)
 
+    def _ensure_open(self):
+        if self.h5_path is not None and self.h5_file is None:
+            self.h5_file = h5py.File(self.h5_path, 'r')
+            print(f"[BreaksDataset] - Opened HDF5 file {self.h5_path}")
+
+    def _cleanup(self):
+        if self.h5_file is not None:
+            print(f"[BreaksDataset] - Closing HDF5 file {self.h5_path}")
+            self.h5_file.close()
+            self.h5_file = None
+
+    def _register_cleanup(self):
+        atexit.register(self._cleanup)
+
+        def signal_handler(sig, frame):
+            self._cleanup()
+            raise KeyboardInterrupt
+        
+        sig.signal(sig.SIGINT, signal_handler)
+        sig.signal(sig.SIGTERM, signal_handler)
+
     def train(self):
         dataset = []
         print(f"[BreakIdxDataset] - Loading training data from {self.root}")
         for line in tqdm.tqdm(self.split_list):
             pair = line.strip().split()
-            index = pair[0]
+            index = pair[1].strip()
             if int(index) == 1:
-                x = pair[1]
+                x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and os.path.exists(os.path.join(self.root, f"{x}.brk")):
+                    if x in EXCLUDE_IDS:
+                        # print(f"[BreakIdxDataset] - Excluding {x} from training set")
+                        continue
                     dataset.append(x)
         print(f"[BreakIdxDataset] - {len(dataset)} training files found")
         return dataset
@@ -70,10 +108,13 @@ class BreakIdxDataset(Dataset):
         print(f"[BreakIdxDataset] - Loading development data from {self.root}")
         for line in tqdm.tqdm(self.split_list):
             pair = line.strip().split()
-            index = pair[0]
+            index = pair[1].strip()
             if int(index) == 2:
-                x = pair[1]
+                x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and os.path.exists(os.path.join(self.root, f"{x}.brk")):
+                    if x in EXCLUDE_IDS:
+                        # print(f"[BreakIdxDataset] - Excluding {x} from dev set")
+                        continue
                     dataset.append(x)
         print(f"[BreakIdxDataset] - {len(dataset)} development files found")
         return dataset
@@ -83,10 +124,13 @@ class BreakIdxDataset(Dataset):
         print(f"[BreakIdxDataset] - Loading test data from {self.root}")
         for line in tqdm.tqdm(self.split_list):
             pair = line.strip().split()
-            index = pair[0]
+            index = pair[1].strip()
             if int(index) == 3:
-                x = pair[1]
+                x = pair[0].strip()
                 if os.path.exists(os.path.join(self.root, f"{x}.sph")) and os.path.exists(os.path.join(self.root, f"{x}.brk")):
+                    if x in EXCLUDE_IDS:
+                        # print(f"[BreakIdxDataset] - Excluding {x} from test set")
+                        continue
                     dataset.append(x)
         print(f"[BreakIdxDataset] - {len(dataset)} test files found")
         return dataset
@@ -104,14 +148,13 @@ class BreakIdxDataset(Dataset):
             for line in lines:
                 boundary_time, _, break_idx = line.split()
                 boundary_time = float(boundary_time)
-                break_idx = int(break_idx[0])
                 # assert break_idx in [1, 2, 3, 4]
-                if break_idx in [0, 1, 2, 3, 4]:
+                if break_idx[0] in ["0", "1", "2", "3", "4"]:
+                    break_idx = int(break_idx[0])
                     times_labels.append((boundary_time, break_idx))
             all_times_labels.append(times_labels)
         num_breaks = [len(times_labels) for times_labels in all_times_labels]
-        print(f"[BreakIdxDataset] - {len(all_times_labels)} files with times and labels found")
-        print(f"[BreakIdxDataset] - number of breaks per file, min: {min(num_breaks)}, max: {max(num_breaks)}, avg: {np.mean(num_breaks)}")
+        print(f"[BreakIdxDataset] - {len(all_times_labels)} files, number of breaks per file, min: {min(num_breaks)}, max: {max(num_breaks)}, avg: {np.mean(num_breaks)}")
         return all_times_labels
 
     def __len__(self):
@@ -178,6 +221,8 @@ class BreakIdxDataset(Dataset):
         return wav
 
     def __getitem__(self, idx):
+        utt_id = os.path.basename(self.dataset[idx])
+
         wav = self.load_audio(idx)
         length = wav.shape[0]
         
@@ -190,8 +235,21 @@ class BreakIdxDataset(Dataset):
         times_labels = self.times_labels[idx]
         times = [t[0] for t in times_labels]
         labels = [t[1] for t in times_labels]
-        labels = self.map_labels(labels)
-        return wav, times, labels, os.path.basename(self.dataset[idx])
+        # labels = self.map_labels(labels)
+        if len(times)==0:
+            print(f"[BreakIdxDataset] - No breaks found for {self.dataset[idx]}")
+            
+        self._ensure_open()
+        if self.h5_file is not None:
+            # load feats from h5 file
+            h5_feats = torch.from_numpy(self.h5_file[utt_id+".sph"][:])
+        else:
+            # h5_feats = torch.zeros_like(
+            #     torch.from_numpy(wav)
+            # )
+            h5_feats = torch.zeros((len(wav), 1))  # Placeholder if no h5 file is provided
+
+        return wav, times, labels, h5_feats, utt_id
     
     def collate_fn(self, samples):
         return zip(*samples)
