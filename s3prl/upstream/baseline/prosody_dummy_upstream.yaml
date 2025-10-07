@@ -1,0 +1,21 @@
+prosody:
+  dummy: True
+  feat_rate: 62.5
+  feat_list:
+    - pitch
+    - delta_pitch
+    - c1
+    - periodicity
+  c1:
+    num_ceps: 13
+    log_mels: True
+    num_mels: 20
+    utterance_normalization: False
+  pitch:
+    log: True
+    pitch_q: 4
+    fmin: 50
+    fmax: 550
+    utterance_normalization: True
+
+sr: 16000
