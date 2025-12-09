@@ -28,9 +28,6 @@ from .dataset import PitchDataset
 # from ..pitch_polish.dataset import PitchDataset as CLPitchDataset
 from argparse import Namespace
 from pathlib import Path
-from ... import temp_define
-
-from s3prl import temp_define
 
 SAMPLE_RATE = 16000
 
@@ -63,6 +60,8 @@ class DownstreamExpert(nn.Module):
         
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})
+
+        self.lookahead_frames = self.modelrc.get('lookahead_frames', 0)
 
         # self.projector = nn.Linear(upstream_dim, self.modelrc['projector_dim'])
         print("[Downstream Expert] Upstream dimension: ", upstream_dim)
@@ -153,10 +152,9 @@ class DownstreamExpert(nn.Module):
         features = pad_sequence(features, batch_first=True)
         labels = pad_sequence(labels, batch_first=True).to(device=device)
 
-        if temp_define.NEXT_FRAME > 0:  # shift labels
-            # print(labels.shape)
-            labels = torch.roll(labels, -temp_define.NEXT_FRAME, 1)
-            labels[:, -temp_define.NEXT_FRAME:] = 0
+        if self.lookahead_frames > 0: # shift labels
+            labels = torch.roll(labels, -self.lookahead_frames, 1)
+            labels[:, -self.lookahead_frames:] = 0
 
         # Origin
         # features = self.projector(features)
@@ -255,8 +253,6 @@ class DownstreamExpert(nn.Module):
         if mode in ["dev"]: # ["test"]
             for i, (pred, label) in enumerate(records["vis"]):
                 t = np.arange(len(pred)) * (self.upstream_rate / SAMPLE_RATE)
-                # plt.plot(np.arange(len(pred)), pred, color='r', label='Prediction')
-                # plt.plot(np.arange(len(label)), label, color='b', label='Groundtruth')
                 plt.plot(t, pred, color='r', label='Prediction')
                 plt.plot(t, label, color='b', label='Groundtruth')
                 plt.xlabel("Time (s)")

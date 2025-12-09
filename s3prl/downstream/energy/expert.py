@@ -27,9 +27,6 @@ from .dataset import EnergyDataset
 # from ..energy_polish.dataset import EnergyDataset as CLEnergyDataset
 from argparse import Namespace
 from pathlib import Path
-from ... import temp_define
-
-from s3prl import temp_define
 
 SAMPLE_RATE = 16000
 
@@ -65,6 +62,8 @@ class DownstreamExpert(nn.Module):
 
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})
+
+        self.lookahead_frames = self.modelrc.get('lookahead_frames', 0)
 
         # self.projector = nn.Linear(upstream_dim, self.modelrc['projector_dim'])
         self.model = model_cls(
@@ -153,10 +152,9 @@ class DownstreamExpert(nn.Module):
         features = pad_sequence(features, batch_first=True)
         labels = pad_sequence(labels, batch_first=True).to(device=device)
 
-        if temp_define.NEXT_FRAME > 0:  # shift labels
-            # print(labels.shape)
-            labels = torch.roll(labels, -temp_define.NEXT_FRAME, 1)
-            labels[:, -temp_define.NEXT_FRAME:] = 0
+        if self.lookahead_frames > 0: # shift labels
+            labels = torch.roll(labels, -self.lookahead_frames, 1)
+            labels[:, -self.lookahead_frames:] = 0
 
         # Origin
         # features = self.projector(features)
