@@ -1,0 +1,19 @@
+runner:
+  evaluate_ratio: 0.02
+  eval_dataloaders: 
+    - dev
+
+downstream_expert: 
+  datarc:
+    h5_dir: /gscratch/tial/data/LibriTTS-R/LibriTTS_R
+    meta_data: /gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/pitch_libritts/split
+    sr: 16000
+    num_workers: 8
+    train_batch_size: 32
+    eval_batch_size: 1
+    glottal_kwargs:
+      return_glottal: True
+
+  modelrc:
+    projector_dim: 256
+    select: FrameLevel
