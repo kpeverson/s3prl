@@ -7,7 +7,7 @@ import torchaudio
 
 class GlottalExtractor:
 
-    def __init__(self, sr, lpc_window_size, lpc_window_stride, lpc_order, lpc_window="hamming", lpf_cutoff=None, lpf_order=4, half_band_signal=False):
+    def __init__(self, sr, lpc_window_size, lpc_window_stride, lpc_order, lpc_window="hamming", lpf_cutoff=None, lpf_order=4, half_band_signal=False, energy_threshold=1e-4):
         self.sr = sr
         self.lpc_window_size = int(sr * lpc_window_size)
         self.lpc_window_stride = int(sr * lpc_window_stride)
@@ -16,6 +16,10 @@ class GlottalExtractor:
         self.lpf_cutoff = lpf_cutoff
         self.lpf_order = lpf_order
         self.half_band_signal = half_band_signal
+        self.energy_threshold = energy_threshold
+        if self.half_band_signal:
+            # divide energy_threshold by 2 since frames are half as long
+            self.energy_threshold /= 2
 
     def half_band(self, x):
         """
@@ -51,7 +55,10 @@ class GlottalExtractor:
             x = signal.sosfiltfilt(sos, x)
         return x
 
-    def inverse_filter(self, x_frame, a):
+    def inverse_filter(self, x_frame, a, idx):
+        if np.sum(x_frame**2) < self.energy_threshold:
+            # print(f"Energy is too low for frame {idx}, skipping inverse filtering")
+            return x_frame
         x_frame_hat = signal.lfilter(
             np.hstack([[0], -1 * a[1:]]), [1], x_frame
         )
@@ -82,7 +89,7 @@ class GlottalExtractor:
         for i, frame in enumerate(frames):
             frame = frame * window
             a = librosa.lpc(frame, order=self.lpc_order)
-            glottal_frame = self.inverse_filter(frame, a)
+            glottal_frame = self.inverse_filter(frame, a, idx)
             glottal_source[i*self.lpc_window_stride : i*self.lpc_window_stride + self.lpc_window_size] += glottal_frame
 
         glottal_source = self.undo_half_band(glottal_source)
