@@ -1,0 +1,42 @@
+
+runner:
+  total_steps: 100000
+  gradient_clipping: 1
+  gradient_accumulate_steps: 1
+
+  log_step: 200
+  eval_step: 1000
+  save_step: 1000
+  max_keep: 1
+  eval_dataloaders: 
+    - dev
+    - test
+  
+optimizer:
+  name: TorchOptim
+  torch_optim_name: Adam
+  lr: 1.0e-7 #1.0e-2
+
+# # comment the whole scheduler config block to disable learning rate scheduling
+# scheduler:
+#   name: linear_schedule_with_warmup
+#   num_warmup_steps: 5000
+
+downstream_expert: 
+  datarc:
+    h5_dir: /gscratch/tial/data/LibriTTS-R/LibriTTS_R
+    meta_data_dir: /gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/duration_libritts/split
+    vocab_path: /gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/duration_libritts/phone_vocab.txt
+    sr: 16000
+    num_workers: 8
+    train_batch_size: 32
+    eval_batch_size: 1
+    # max_timestep: 128000
+    dur_mode: phone
+
+  modelrc:
+    projector_dim: 256
+    phoneme_dim: 128
+    select: FrameLevel
+    dur_mode_pooling: AttentivePooling
+    feature_rate: 50
