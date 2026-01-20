@@ -31,7 +31,8 @@ downstream_expert:
     train_batch_size: 1
     eval_batch_size: 1
     # max_timestep: 128000
-    return_glottal: True
+    glottal_kwargs:
+      return_glottal: True
 
   modelrc:
     projector_dim: 256

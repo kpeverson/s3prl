@@ -15,7 +15,7 @@ runner:
 optimizer:
   name: TorchOptim
   torch_optim_name: Adam
-  lr: 1.0e-4 #1.0e-2
+  lr: 1.0e-5 #1.0e-2
 
 # # comment the whole scheduler config block to disable learning rate scheduling
 # scheduler:

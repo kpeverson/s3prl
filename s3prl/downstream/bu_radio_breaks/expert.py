@@ -51,13 +51,14 @@ class DownstreamExpert(nn.Module):
 
         root_dir = Path(self.datarc['file_path'])
         meta_data = self.datarc['meta_data']
-        return_glottal = self.datarc.get('return_glottal', False)
         max_timestep = self.datarc.get('max_timestep', None)
 
         self.h5_path = self.datarc.get('h5_path', None)
-        self.train_dataset = BreakIdxDataset('train', root_dir, meta_data, max_timestep, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
-        self.dev_dataset = BreakIdxDataset('dev', root_dir, meta_data, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
-        self.test_dataset = BreakIdxDataset('test', root_dir, meta_data, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        glottal_kwargs = self.datarc.get('glottal_kwargs', {"return_glottal": False})
+        
+        self.train_dataset = BreakIdxDataset('train', root_dir, meta_data, glottal_kwargs, max_timestep, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        self.dev_dataset = BreakIdxDataset('dev', root_dir, meta_data, glottal_kwargs, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        self.test_dataset = BreakIdxDataset('test', root_dir, meta_data, glottal_kwargs, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
 
         model_cls = eval(self.modelrc['select'])
         self.model_cls = model_cls
@@ -88,8 +89,8 @@ class DownstreamExpert(nn.Module):
         else:
             self.objective = nn.CrossEntropyLoss()
 
-        self.save_metric = self.modelrc.get('save_metric', 'macro_f1')
-        assert self.save_metric in ['macro_f1', 'acc'], f"Unsupported save_metric {self.save_metric}. Supported metrics are 'macro_f1' and 'acc'."
+        self.save_metric = self.modelrc.get('save_metric', 'f1')
+        assert self.save_metric in ['macro_f1', 'acc', 'f1'], f"Unsupported save_metric {self.save_metric}. Supported metrics are 'macro_f1', 'acc', and 'f1'."
 
     def _get_train_dataloader(self, dataset):
         sampler = DistributedSampler(dataset) if is_initialized() else None
@@ -200,20 +201,27 @@ class DownstreamExpert(nn.Module):
         if len(records["predict_break"]) > 0 and len(records["truth_break"]) > 0:
             y_pred = np.array(records["predict_break"])
             y_true = np.array(records["truth_break"])
-            macro_f1 = f1_score(y_true, y_pred, average="macro")
+            if self.num_break_idxs == 2:
+                # compute f1 score on class 1
+                f1 = f1_score(y_true, y_pred, pos_label=1)
+                f1_metric_str = "binary"
+            else:
+                f1 = f1_score(y_true, y_pred, average="macro")
+                f1_metric_str = "macro"
             cm = confusion_matrix(y_true, y_pred, labels=list(range(self.num_break_idxs)))
             logger.add_scalar(
-                f'bu_radio_breaks/{mode}-macro_f1',
-                macro_f1,
+                f'bu_radio_breaks/{mode}-{f1_metric_str}_f1',
+                f1,
                 global_step=global_step
             )
             with open(Path(self.expdir) / "log.log", 'a') as f:
-                print(f"\n{mode} confusion matrix:\n{cm}")
-                print(f"\n{mode} macro F1: {macro_f1}\n")
-                f.write(f"{mode} macro F1 at step {global_step}: {macro_f1}\n")
-                if mode == "dev" and macro_f1 > self.best_score and self.save_metric == "macro_f1":
-                    self.best_score = torch.ones(1) * macro_f1
-                    f.write(f"New best on {mode} at step {global_step}: {macro_f1}\n")
+                print(f"\n{mode} confusion matrix:\n{cm}\n")
+                print(f"\n{mode} {f1_metric_str} F1: {f1}\n")
+                f.write(f"\n{mode} confusion matrix:\n{cm}\n")
+                f.write(f"{mode} {f1_metric_str} F1 at step {global_step}: {f1}\n")
+                if mode == "dev" and f1 > self.best_score and "f1" in self.save_metric:
+                    self.best_score = torch.ones(1) * f1
+                    f.write(f"New best on {mode} at step {global_step}: {f1}\n")
                     save_names.append(f"{mode}-best.ckpt")
 
         if mode in ["dev", "test"]:

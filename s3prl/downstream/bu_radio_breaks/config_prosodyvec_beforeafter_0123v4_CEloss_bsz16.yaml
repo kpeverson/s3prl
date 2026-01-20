@@ -1,6 +1,6 @@
 
 runner:
-  total_steps: 40000
+  total_steps: 2500 # 40000
   gradient_clipping: 1
   gradient_accumulate_steps: 4
 
@@ -28,9 +28,10 @@ downstream_expert:
     meta_data: /gscratch/tial/data/bu_radio/splits.tsv
     sr: 16000
     num_workers: 8
-    train_batch_size: 1
+    train_batch_size: 16
     eval_batch_size: 1
     # max_timestep: 128000
+    return_glottal: True
     window_size: 0.2
     labels_mode: 0123v4
     glottal_kwargs:

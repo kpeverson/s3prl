@@ -51,13 +51,13 @@ class DownstreamExpert(nn.Module):
 
         root_dir = Path(self.datarc['file_path'])
         meta_data = self.datarc['meta_data']
-        return_glottal = self.datarc.get('return_glottal', False)
+        glottal_kwargs = self.datarc.get('glottal_kwargs', {"return_glottal": False})
         max_timestep = self.datarc.get('max_timestep', None)
 
         self.h5_path = self.datarc.get('h5_path', None)
-        self.train_dataset = TonesDataset('train', root_dir, meta_data, max_timestep, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
-        self.dev_dataset = TonesDataset('dev', root_dir, meta_data, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
-        self.test_dataset = TonesDataset('test', root_dir, meta_data, return_glottal=return_glottal, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        self.train_dataset = TonesDataset('train', root_dir, meta_data, glottal_kwargs, max_timestep, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        self.dev_dataset = TonesDataset('dev', root_dir, meta_data, glottal_kwargs, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
+        self.test_dataset = TonesDataset('test', root_dir, meta_data, glottal_kwargs, sr=self.datarc.get('sr', 16000), h5_path=self.h5_path)
 
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})

@@ -15,7 +15,7 @@ runner:
 optimizer:
   name: TorchOptim
   torch_optim_name: Adam
-  lr: 1.0e-4 #1.0e-2
+  lr: 1.0e-5 #1.0e-2
 
 # # comment the whole scheduler config block to disable learning rate scheduling
 # scheduler:
@@ -31,14 +31,13 @@ downstream_expert:
     train_batch_size: 1
     eval_batch_size: 1
     # max_timestep: 128000
+    return_glottal: True
     window_size: 0.2
     labels_mode: 0123v4
-    glottal_kwargs:
-      return_glottal: True
 
   modelrc:
     projector_dim: 256
     select: UtteranceLevelBeforeAfter
     UtteranceLevelBeforeAfter:
       pooling: AttentivePooling
-    feature_rate: 62.5
+    feature_rate: 50

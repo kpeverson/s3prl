@@ -21,12 +21,14 @@ import glob
 import tqdm
 from pathlib import Path
 
+from ...dataset.glottal_extraction import GlottalExtractor
+
 # CACHE_PATH = os.path.join(os.path.dirname(__file__), '.cache/')
 EXCLUDE_IDS = ["data/f3a/labnews/j/radio/f3ajrlp2", "data/f2b/radio/s18/f2bs18p8"]
 
 # BU Radio Corpus break indices classification dataset
 class TonesDataset(Dataset):
-    def __init__(self, mode, corpus_dir, meta_data, max_timestep=None, return_glottal=False, sr=16000, h5_path=None, **kwargs):
+    def __init__(self, mode, corpus_dir, meta_data, glottal_kwargs, max_timestep=None, sr=16000, h5_path=None, **kwargs):
         self.root = corpus_dir
         self.meta_data = meta_data
         self.split_list = open(self.meta_data, "r").readlines()
@@ -57,14 +59,18 @@ class TonesDataset(Dataset):
                 all_labels[l] += 1
         print(f"[TonesDataset] - labels distribution: {all_labels}")
 
-        self.return_glottal = return_glottal
-        if return_glottal:
-            self.lpc_order = kwargs.get("lpc_order", 16)
-            self.lpc_window = kwargs.get("lpc_window", "hamming")
-            self.lpc_window_size = kwargs.get("lpc_window_size", 0.025)
-            self.lpc_window_stride = kwargs.get("lpc_window_stride", 0.01)
-            self.energy_threshold = kwargs.get("energy_threshold", 1e-4)
-            self.glottal_lpf_cutoff = kwargs.get("glottal_lpf_cutoff", 1000)
+        self.return_glottal = glottal_kwargs.get("return_glottal", False)
+        if self.return_glottal:
+            self.glottal_extractor = GlottalExtractor(
+                sr=sr,
+                lpc_window_size=glottal_kwargs.get('lpc_window_size', 0.025),
+                lpc_window_stride=glottal_kwargs.get('lpc_window_stride', 0.010),
+                lpc_order=glottal_kwargs.get('lpc_order', 16),
+                lpc_window=glottal_kwargs.get('lpc_window', 'hamming'),
+                lpf_cutoff=glottal_kwargs.get('lpf_cutoff', 1000),
+                lpf_order=glottal_kwargs.get('lpf_order', 4),
+                half_band_signal=glottal_kwargs.get('half_band_signal', False)
+            )
 
     def _ensure_open(self):
         if self.h5_path is not None and self.h5_file is None:
@@ -157,7 +163,7 @@ class TonesDataset(Dataset):
                 time, _, ton = line.split()
                 time = float(time)
                 times_tones.append((time, ton))
-            print(f"[TonesDataset] - {path}: times_tones: {times_tones}")
+            # print(f"[TonesDataset] - {path}: times_tones: {times_tones}")
             # load words
             times_labels = []
             with open(ala_path, "r") as f:
@@ -257,7 +263,8 @@ class TonesDataset(Dataset):
             wav = wav.mean(dim=0, keepdim=False)
         wav = wav.squeeze(0)
         if self.return_glottal:
-            wav = self.forward_glottal(wav, sr, idx)
+            # wav = self.forward_glottal(wav, sr, idx)
+            wav = self.glottal_extractor.extract(wav, idx)
         else:
             wav = wav.numpy()
 
