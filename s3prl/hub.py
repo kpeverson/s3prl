@@ -24,6 +24,7 @@ from s3prl.upstream.mos_prediction.hubconf import *
 from s3prl.upstream.mqtts_quantizer.hubconf import *
 from s3prl.upstream.multires_hubert.hubconf import *
 from s3prl.upstream.npc.hubconf import *
+from s3prl.upstream.null.hubconf import *
 from s3prl.upstream.pase.hubconf import *
 from s3prl.upstream.passt.hubconf import *
 from s3prl.upstream.prosodyvec.hubconf import *
