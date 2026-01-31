@@ -71,13 +71,10 @@ class NormalizedSinusoidalEncoding(torch.nn.Module):
         div_term = torch.exp(
             torch.arange(0, self.C, 2, dtype=pos.dtype, device=pos.device) * -(torch.log(torch.tensor(10000.0)) / self.C)
         ) # (C//2,)
-        print(f"div_term: {div_term.shape}")
         sinusoid_inp = pos.unsqueeze(-1) * div_term # (B, 3, C//2)
-        print(f"sinusoid_inp: {sinusoid_inp.shape}")
         pos_enc = torch.zeros(
             pos.size(0), pos.size(1), self.C, dtype=pos.dtype, device=pos.device,
         )
-        print(f"pos_enc: {pos_enc.shape}")
         pos_enc[:, :, 0::2] = torch.sin(sinusoid_inp)
         pos_enc[:, :, 1::2] = torch.cos(sinusoid_inp)
 
