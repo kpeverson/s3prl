@@ -103,12 +103,15 @@ class MeanPooling(nn.Module):
             feature_BxTxH - [BxTxH]   Acoustic feature with shape 
             features_len  - [B] of feature length
         '''
-        agg_vec_list = []
-        for i in range(len(feature_BxTxH)):
-            agg_vec = torch.mean(feature_BxTxH[i][:features_len[i]], dim=0)
-            agg_vec_list.append(agg_vec)
+        # zero out padded positions
+        device = feature_BxTxH.device
+        len_masks = torch.lt(torch.arange(features_len.max()).unsqueeze(0).to(device), features_len.unsqueeze(1))
+        len_masks = len_masks.unsqueeze(-1).float()
+        feature_BxTxH = feature_BxTxH * len_masks
 
-        return torch.stack(agg_vec_list), torch.ones(len(feature_BxTxH)).long()
+        # sum and divide by lengths
+        feature_mean = torch.sum(feature_BxTxH, dim=1) / features_len.unsqueeze(-1).float()
+        return feature_mean, torch.ones(len(feature_BxTxH)).long()
 
 class SelfAttentionCLSPooling(nn.Module):
     ''' Self Attention Pooling consisting of a single multi-head self-attention layer and a CLS token '''
@@ -140,7 +143,7 @@ class SelfAttentionCLSPooling(nn.Module):
 class AttentivePooling(nn.Module):
     ''' Attentive Pooling module incoporate attention mask'''
 
-    def __init__(self, input_dim, activation, **kwargs):
+    def __init__(self, input_dim, activation, fixed=True, **kwargs):
         super(AttentivePooling, self).__init__()
         self.sap_layer = AttentivePoolingModule(input_dim, activation)
 
@@ -156,10 +159,9 @@ class AttentivePooling(nn.Module):
 
         return sap_vec, torch.ones(len(feature_BxTxH)).long()
 
-
 class AttentivePoolingModule(nn.Module):
     """
-    Implementation of Attentive Pooling 
+    Implementation of AttentivePoolingModule with correct masking
     """
     def __init__(self, input_dim, activation='ReLU', **kwargs):
         super(AttentivePoolingModule, self).__init__()
@@ -167,20 +169,19 @@ class AttentivePoolingModule(nn.Module):
         self.W = nn.Linear(input_dim, 1)
         self.act_fn = getattr(nn, activation)()
         self.softmax = nn.functional.softmax
-
+        
     def forward(self, batch_rep, att_mask):
         """
         input:
-        batch_rep : size (B, T, H), B: batch size, T: sequence length, H: Hidden dimension
-        
-        attention_weight:
-        att_w : size (B, T, 1)
-        
+            batch_rep : size (B, T, H), B: batch size, T: sequence length, H: Hidden dimension
+            att_mask : size (B, T), with True on valid positions and False on padded positions
+            
         return:
-        utter_rep: size (B, H)
+            utter_rep : size (B, H)
+            att_w : size (B, T, 1)
         """
         att_logits = self.W(self.act_fn(self.W_a(batch_rep))).squeeze(-1)
-        att_logits = att_mask + att_logits
+        att_logits = att_logits.masked_fill(~att_mask, float('-inf'))
         att_w = self.softmax(att_logits, dim=-1).unsqueeze(-1)
         utter_rep = torch.sum(batch_rep * att_w, dim=1)
 
