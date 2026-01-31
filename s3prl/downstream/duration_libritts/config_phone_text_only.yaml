@@ -15,7 +15,7 @@ runner:
 optimizer:
   name: TorchOptim
   torch_optim_name: Adam
-  lr: 1.0e-6 #1.0e-2
+  lr: 1.0e-5 #1.0e-2
 
 # # comment the whole scheduler config block to disable learning rate scheduling
 # scheduler:
@@ -29,7 +29,7 @@ downstream_expert:
     vocab_path: /gscratch/tial/kpever/workspace/s3prl/s3prl/downstream/duration_libritts/phone_vocab.txt
     sr: 16000
     num_workers: 8
-    train_batch_size: 64
+    train_batch_size: 32
     eval_batch_size: 1
     # max_timestep: 128000
     dur_mode: phone
@@ -40,3 +40,4 @@ downstream_expert:
     select: FrameLevel
     dur_mode_pooling: AttentivePooling
     feature_rate: 50
+    text_only: true

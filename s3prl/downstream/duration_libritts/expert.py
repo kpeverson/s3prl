@@ -14,11 +14,13 @@ from torch.distributed import is_initialized
 from torch.nn.utils.rnn import pad_sequence
 #-------------#
 from ..model import *
-from .dataset import DurationDataset
+from .dataset import DurationDataset, PhoneDurationDataset, WordDurationDataset
 from .utils import get_triphone_context, get_relative_intra_word_pos, NormalizedSinusoidalEncoding
 from argparse import Namespace
 from pathlib import Path
 from sklearn.metrics import f1_score, confusion_matrix
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from transformers import AutoModel, AutoTokenizer
 import numpy as np
 
 class DownstreamExpert(nn.Module):
@@ -43,43 +45,57 @@ class DownstreamExpert(nn.Module):
         glottal_kwargs = self.datarc.get('glottal_kwargs', {"return_glottal": False})
         intra_word_pos = self.datarc.get('intra_word_pos', True)
         meta_data_dir = self.datarc['meta_data_dir']
-        vocab_path = self.datarc['vocab_path']
 
         self.dur_mode = self.datarc.get('dur_mode', 'syl')
-        if self.dur_mode != 'phone':
+        if self.dur_mode not in ['phone', 'word']:
             raise NotImplementedError("Word-level duration prediction is not implemented yet.")
-
-        self.train_dataset = DurationDataset('train', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, dur_mode=self.dur_mode, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
-        self.dev_dataset = DurationDataset('dev', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, dur_mode=self.dur_mode, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
-        self.test_dataset = DurationDataset('test', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, dur_mode=self.dur_mode, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
-
+        if self.dur_mode == 'phone':
+            self.phoneme_dim = self.modelrc.get('phoneme_dim', 256)
+            vocab_path = self.datarc['vocab_path']
+            self.train_dataset = PhoneDurationDataset('train', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
+            self.dev_dataset = PhoneDurationDataset('dev', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
+            self.test_dataset = PhoneDurationDataset('test', h5_dir, meta_data_dir, vocab_path, glottal_kwargs, intra_word_pos=intra_word_pos, upstream_rate=upstream_rate)
+        if self.dur_mode == 'word':
+            text_model = self.datarc.get('text_model', 'distilbert-base-uncased')
+            self.bert_model = AutoModel.from_pretrained(text_model)
+            self.tokenizer = AutoTokenizer.from_pretrained(text_model)
+            self.train_dataset = WordDurationDataset('train', h5_dir, meta_data_dir, glottal_kwargs, upstream_rate=upstream_rate)
+            self.dev_dataset = WordDurationDataset('dev', h5_dir, meta_data_dir, glottal_kwargs, upstream_rate=upstream_rate)
+            self.test_dataset = WordDurationDataset('test', h5_dir, meta_data_dir, glottal_kwargs, upstream_rate=upstream_rate)
+        
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})
         self.projector = nn.Linear(upstream_dim, self.modelrc['projector_dim'])
         self.register_buffer('best_loss', torch.zeros(1))
-
-        self.phoneme_dim = self.modelrc.get('phoneme_dim', 256)
 
         print(f"[Downstream Expert] Upstream dimension: {upstream_dim}")
 
         self.feature_rate = self.modelrc.get('feature_rate', 62.5)
 
         if self.text_only:
-            model_input_dim = self.phoneme_dim*3
+            if self.dur_mode == 'phone':
+                model_input_dim = self.phoneme_dim*3
+            elif self.dur_mode == 'word':
+                model_input_dim = self.bert_model.config.hidden_size
         else:
-            model_input_dim = self.modelrc['projector_dim'] + self.phoneme_dim*3
-            self.dur_mode_pooler = eval(self.modelrc.get('dur_mode_pooling', 'AttentivePooling'))(
-                input_dim=self.modelrc['projector_dim'],
-                activation=self.modelrc.get('pooling_activation', 'ReLU')
-            )
+            if self.dur_mode == 'phone':
+                model_input_dim = self.modelrc['projector_dim'] + self.phoneme_dim*3
+                self.phone_embedding = nn.Embedding(len(self.train_dataset.arpabet_phones), self.phoneme_dim)
+                self.stress_embedding = nn.Embedding(len(self.train_dataset.phone_stress), self.phoneme_dim)
+                self.intra_word_pos_enc = NormalizedSinusoidalEncoding(self.phoneme_dim)
+            elif self.dur_mode == 'word':
+                # add text model hidden size + projector dim
+                model_input_dim = self.modelrc['projector_dim'] + self.bert_model.config.hidden_size
+
+        self.dur_mode_pooler = eval(self.modelrc.get('dur_mode_pooling', 'AttentivePooling'))(
+            input_dim=self.modelrc['projector_dim'],
+            activation=self.modelrc.get('pooling_activation', 'ReLU')
+        )
         self.model = model_cls(
             input_dim=model_input_dim,
             output_dim=1,
             **model_conf,
         )
-        self.phone_embedding = nn.Embedding(len(self.train_dataset.arpabet_phones), self.phoneme_dim)
-        self.stress_embedding = nn.Embedding(len(self.train_dataset.phone_stress), self.phoneme_dim)
-        self.intra_word_pos_enc = NormalizedSinusoidalEncoding(self.phoneme_dim)
 
         self.objective = nn.MSELoss()
         self.save_metric = 'mse'
@@ -126,112 +142,106 @@ class DownstreamExpert(nn.Module):
         dur_mode_feats = pad_sequence(feats_list, batch_first=True)
         return dur_mode_feats, dur_mode_feats_lens
 
-    # def get_triphone_context(self, phone_idxs, stress_idxs, intra_word_positions):
-    #     """
-    #     input:
-    #         phone_idxs: list of Tensor, each Tensor is of shape (num_phones,)
-    #         stress_idxs: list of Tensor, each Tensor is of shape (num_phones,)
-    #         intra_word_positions: list of Tensor, each Tensor is of shape (num_phones,)
-    #     returns:
-    #         triphone_phone_idxs: list of Tensor, each Tensor is of shape (num_phones, 3)
-    #         triphone_stress_idxs: list of Tensor, each Tensor is of shape (num_phones, 3)
-    #         triphone_intra_word_positions: list of Tensor, each Tensor is of shape (num_phones, 3)
+    def convert_token2word_embeds(self, token_embeds, token2word_idxs):
 
-    #     triphone_phone_idxs contains the [prev_phone_idx, phone_idx, next_phone_idx] for each phone
-    #     """
-    #     triphone_phone_idxs = []
-    #     triphone_stress_idxs = []
-    #     triphone_intra_word_positions = []
-    #     for p_idxs, s_idxs, iwp_idxs in zip(phone_idxs, stress_idxs, intra_word_positions):
-    #         num_phones = len(p_idxs)
-    #         # use -1 for padding
-    #         triphone_p_idxs = torch.stack([
-    #             torch.cat([torch.tensor([-1], device=p_idxs.device), p_idxs[:-1]]), # previous phone
-    #             p_idxs, # current phone
-    #             torch.cat([p_idxs[1:], torch.tensor([-1], device=p_idxs.device)]) # next phone
-    #         ], dim=-1)
-    #         triphone_phone_idxs.append(triphone_p_idxs)
-    #         triphone_s_idxs = torch.stack([
-    #             torch.cat([torch.tensor([-1], device=s_idxs.device), s_idxs[:-1]]), # previous stress
-    #             s_idxs, # current stress
-    #             torch.cat([s_idxs[1:], torch.tensor([-1], device=s_idxs.device)]) # next stress
-    #         ], dim=-1)
-    #         triphone_stress_idxs.append(triphone_s_idxs)
-    #         triphone_iwp = torch.stack([
-    #             torch.cat([torch.tensor([-1], device=p_idxs.device), iwp_idxs[:-1]]), # previous intra word position
-    #             iwp_idxs, # current intra word position
-    #             torch.cat([iwp_idxs[1:], torch.tensor([-1], device=p_idxs.device)]) # next intra word position
-    #         ], dim=-1)
-    #         triphone_intra_word_positions.append(triphone_iwp)
+        device = token_embeds.device
+        B, T, D = token_embeds.shape
 
-    #     return triphone_phone_idxs, triphone_stress_idxs, triphone_intra_word_positions
-    
-    # def get_relative_intra_word_pos(self, intra_word_positions, word_lengths):
-    #     """
-    #     input:
-    #         intra_word_positions: list of Tensor, each Tensor of shape (num_phones,)
-    #         word_lengths: list of Tensor, each Tensor of shape (num_phones,)
-    #     returns:
-    #         relative_intra_word_pos: list of Tensor, each Tensor of shape (num_phones,)
-    #     """
-    #     relative_intra_word_positions = []
-    #     for iwp, wl in zip(intra_word_positions, word_lengths):
-    #         relative_iwp = iwp.float() / wl.float()
-    #         relative_intra_word_positions.append(relative_iwp)
-    #     return relative_intra_word_positions
+        flat_embeds = token_embeds.reshape(-1, D) # (B*T, D)
+
+        valid = token2word_idxs >= 0  # (B, T)
+        num_words_per_sent = token2word_idxs.max(dim=1).values + 1
+        offsets = torch.cat([
+            torch.zeros(1, device=device, dtype=torch.long),
+            num_words_per_sent.cumsum(0)[:-1]
+        ])
+        global_token2word_idxs = torch.where(
+            valid,
+            token2word_idxs + offsets[:, None],
+            token2word_idxs,    # -1 stays -1
+        )
+        flat_token2word_idxs = global_token2word_idxs.reshape(-1)  # (B*T,)
+
+        # keep only valid tokens
+        valid = flat_token2word_idxs >= 0  # (num_tokens,)
+        flat_token2word_idxs = flat_token2word_idxs[valid]  # (num_tokens,)
+        flat_embeds = flat_embeds[valid] # (num_tokens, D)
+
+        # aggregate token embeddings to word embeddings (mean numerator)
+        total_words = num_words_per_sent.sum().item()
+        word_embeds = torch.zeros(total_words, D, device=device)  # (total_words, D)
+        word_embeds.index_add_(0, flat_token2word_idxs, flat_embeds)
+
+        # get counts of tokens in each word (mean denominator)
+        token_in_word_counts = torch.zeros(total_words, device=device)  # (total_words,)
+        token_in_word_counts.index_add_(
+            0, flat_token2word_idxs, torch.ones_like(flat_token2word_idxs, dtype=torch.float, device=device)
+        )
+
+        # mean
+        word_embeds = word_embeds / token_in_word_counts.unsqueeze(-1)
+
+        return word_embeds
         
-    def forward(self, mode, features, sts, ets, durs, phone_idxs, stress_idxs, intra_word_positions, word_lengths, records, **kwargs):
+    def forward(self, mode, features, sts, ets, durs, text_input, stress_ids, intra_word_positions, word_lengths, records, **kwargs):
         device = features[0].device
 
         all_durs = torch.cat([d for d in durs]).to(device=device).unsqueeze(-1)
 
-        rel_intra_word_positions = get_relative_intra_word_pos(intra_word_positions, word_lengths)
-        triphone_phone_idxs, triphone_stress_idxs, triphone_intra_word_positions = get_triphone_context(phone_idxs, stress_idxs, rel_intra_word_positions)
-        all_phone_idxs = torch.cat([ph for ph in triphone_phone_idxs]).to(device=device) # shape (total_num_phones, 3)
-        all_stress_idxs = torch.cat([st for st in triphone_stress_idxs]).to(device=device) # shape (total_num_phones, 3)
-        all_rel_iwp = torch.cat([iwp for iwp in triphone_intra_word_positions]).to(device=device) # shape (total_num_phones, 3)
-        # get phone and stress embeddings (each of shape (total_num_phones, 3, phoneme_dim))
-        # map padding index -1 to zero for now - will zero out the embeddings later
-        phone_embeds = self.phone_embedding(torch.clamp(all_phone_idxs, min=0))
-        stress_embeds = self.stress_embedding(torch.clamp(all_stress_idxs, min=0))
-        intra_word_pos_enc = self.intra_word_pos_enc(all_rel_iwp)  # shape (total_num_phones, 3, phoneme_dim)
-        # zero out the embeddings for padding index -1
-        phone_embeds = phone_embeds * (all_phone_idxs.unsqueeze(-1) != -1).float()
-        stress_embeds = stress_embeds * (all_stress_idxs.unsqueeze(-1) != -1).float()
-        intra_word_pos_enc = intra_word_pos_enc * (all_rel_iwp.unsqueeze(-1) != -1).float()
-        # add all three
-        phone_embeds += stress_embeds + intra_word_pos_enc
-        # concatenate on last two dimensions, e.g. (total_num_phones, 3, phoneme_dim) -> (total_num_phones, 3*phoneme_dim)
-        phone_embeds = phone_embeds.view(phone_embeds.size(0), -1)
-
+        if self.dur_mode == 'phone':
+            # text input: phone indices
+            rel_intra_word_positions = get_relative_intra_word_pos(intra_word_positions, word_lengths)
+            triphone_phone_idxs, triphone_stress_ids, triphone_intra_word_positions = get_triphone_context(text_input, stress_ids, rel_intra_word_positions)
+            all_phone_idxs = torch.cat([ph for ph in triphone_phone_idxs]).to(device=device) # shape (total_num_phones, 3)
+            all_stress_ids = torch.cat([st for st in triphone_stress_ids]).to(device=device) # shape (total_num_phones, 3)
+            all_rel_iwp = torch.cat([iwp for iwp in triphone_intra_word_positions]).to(device=device) # shape (total_num_phones, 3)
+            # get phone and stress embeddings (each of shape (total_num_phones, 3, phoneme_dim))
+            # map padding index -1 to zero for now - will zero out the embeddings later
+            phone_embeds = self.phone_embedding(torch.clamp(all_phone_idxs, min=0))
+            stress_embeds = self.stress_embedding(torch.clamp(all_stress_ids, min=0))
+            intra_word_pos_enc = self.intra_word_pos_enc(all_rel_iwp)  # shape (total_num_phones, 3, phoneme_dim)
+            # zero out the embeddings for padding index -1
+            phone_embeds = phone_embeds * (all_phone_idxs.unsqueeze(-1) != -1).float()
+            stress_embeds = stress_embeds * (all_stress_ids.unsqueeze(-1) != -1).float()
+            intra_word_pos_enc = intra_word_pos_enc * (all_rel_iwp.unsqueeze(-1) != -1).float()
+            # add all three
+            phone_embeds += stress_embeds + intra_word_pos_enc
+            # concatenate on last two dimensions, e.g. (total_num_phones, 3, phoneme_dim) -> (total_num_phones, 3*phoneme_dim)
+            text_embeds = phone_embeds.view(phone_embeds.size(0), -1)
+        elif self.dur_mode == 'word':
+            # text_input: sentences (list of strings)
+            with torch.no_grad():
+                tokenizer_output = self.tokenizer(
+                    text_input,
+                    return_tensors='pt',
+                    return_offsets_mapping=True,
+                    padding=True,
+                    add_special_tokens=True,
+                )
+                token_ids = tokenizer_output['input_ids'].to(device=device)  # shape (batch_size, seq_len)
+                token2word_idxs = []
+                for i in range(len(text_input)):
+                    word_ids = tokenizer_output.word_ids(batch_index=i)  # list of length seq_len
+                    word_ids = torch.LongTensor([idx if idx is not None else -1 for idx in word_ids])  # convert None to -1
+                    token2word_idxs.append(word_ids)
+                token2word_idxs = torch.stack(token2word_idxs, dim=0).to(device=device)  # shape (batch_size, seq_len)
+                attention_mask = (token_ids != self.tokenizer.pad_token_id).to(device=device)
+                token_embeds = self.bert_model(
+                    input_ids=token_ids,
+                    attention_mask=attention_mask
+                ).last_hidden_state  # shape (batch_size, max_num_words, hidden_size)
+                # get word-level embeds from token-level embeds
+                text_embeds = self.convert_token2word_embeds(token_embeds, token2word_idxs)  # shape (total_num_words, hidden_size)
         if self.text_only:
-            dur_mode_features = phone_embeds
+            dur_mode_features = text_embeds
         else:
-            # concatenate dur_mode_features with phone_embeds along last dimension
+            # concatenate dur_mode_features with text_embeds along last dimension
             dur_mode_features, dur_mode_feats_lens = self.convert_to_dur_mode_level(features, sts, ets)
             dur_mode_features = self.projector(dur_mode_features)
             dur_mode_features, _ = self.dur_mode_pooler(dur_mode_features, dur_mode_feats_lens)
-            dur_mode_features = torch.cat([dur_mode_features, phone_embeds], dim=-1)
-
-        # check dur_mode_features for nans
-        if torch.isnan(dur_mode_features).any():
-            print("dur_mode_features contains NaNs")
-            exit(1)
+            dur_mode_features = torch.cat([dur_mode_features, text_embeds], dim=-1)
         predicted_durs, _ = self.model(dur_mode_features)
-        # check predicted_durs for nans
-        if torch.isnan(predicted_durs).any():
-            print("predicted_durs contains NaNs")
-            exit(1)
-        # check all_durs for nans
-        if torch.isnan(all_durs).any():
-            print("all_durs contains NaNs")
-            exit(1)
         loss = self.objective(predicted_durs, all_durs)
-        # check loss for nans
-        if torch.isnan(loss).any():
-            print("loss is NaN")
-            exit(1)
-        # print(f"loss: {loss.item()}")
 
         records['loss'].append(loss.item())
 

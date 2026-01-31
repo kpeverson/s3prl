@@ -15,6 +15,7 @@ import sys
 import time
 import glob
 import tqdm
+from transformers import AutoTokenizer, AutoModel
 import json
 import textgrid
 
@@ -25,7 +26,7 @@ SAMPLE_RATE = 16000
 LIBRITTSR_SR = 24000
 
 class DurationDataset(Dataset):
-    def __init__(self, mode, corpus_dir, meta_data_dir, vocab_path, glottal_kwargs, dur_mode="phone", intra_word_pos=True, upstream_rate=160, use_spkr_embeds=False, **kwargs):
+    def __init__(self, mode, corpus_dir, meta_data_dir, glottal_kwargs, upstream_rate=160, use_spkr_embeds=False, **kwargs):
 
         self.mode = mode
         self.corpus_dir = corpus_dir
@@ -35,8 +36,9 @@ class DurationDataset(Dataset):
             self.h5_path = os.path.join(corpus_dir, f'{mode}-clean.h5')
         self.h5_file = None
         self.meta_data_dir = meta_data_dir
-        self.vocab_path = vocab_path
         self.upstream_rate = upstream_rate
+        self.min_frame_size = 1.0 / (SAMPLE_RATE / self.upstream_rate)
+        print(f"[DurationDataset] - min_frame_size: {self.min_frame_size} seconds")
 
         self.use_spkr_embeds = use_spkr_embeds
         if self.use_spkr_embeds:
@@ -66,22 +68,40 @@ class DurationDataset(Dataset):
                 usage_list.append(line.strip())
         self.dataset = usage_list
 
-        assert dur_mode in ["phone", "syl", "word"], "dur_mode should be one of {phone, syl, word}"
-        self.dur_mode = dur_mode
-        self.intra_word_pos = intra_word_pos
-        cache_path = os.path.join(CACHE_PATH, f"{self.mode}_times_durs.pkl")
-        if os.path.isfile(cache_path):
-            print(f"[DurationDataset] - loading cached {self.mode} times_durs from {cache_path}")
-            with open(cache_path, "rb") as f:
-                self.times_durs = pickle.load(f)
-        else:
-            self.times_durs = self.get_times_durs(self.dataset)
-            os.makedirs(CACHE_PATH, exist_ok=True)
-            print(f"[DurationDataset] - saving cached {self.mode} times_durs to {cache_path}")
-            with open(cache_path, "wb") as f:
-                pickle.dump(self.times_durs, f)
+    def _get_h5_file(self):
+        if self.h5_file is None:
+            self.h5_file = h5py.File(self.h5_path, "r")
+        return self.h5_file
+    
+    def __len__(self):
+        return len(self.dataset)
 
-        # self.arpabet_phones = ['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'B', 'CH', 'D', 'DH', 'EH', 'ER', 'EY', 'F', 'G', 'HH', 'IH', 'IY', 'JH', 'K', 'L', 'M', 'N', 'NG', 'OW', 'OY', 'P', 'R', 'S', 'SH', 'T', 'TH', 'UH', 'UW', 'V', 'W', 'Y', 'Z', 'ZH']
+    def filter_short_durations(self, times_durs):
+        filtered = [
+            [td for td in tds if td[2] >= self.min_frame_size]
+            for tds in times_durs
+        ]
+        return filtered
+
+class PhoneDurationDataset(DurationDataset):
+    def __init__(self, mode, corpus_dir, meta_data_dir, vocab_path, glottal_kwargs, intra_word_pos=False, upstream_rate=160, use_spkr_embeds=False, **kwargs):
+        super().__init__(mode, corpus_dir, meta_data_dir, glottal_kwargs, upstream_rate=upstream_rate, use_spkr_embeds=use_spkr_embeds, **kwargs)
+        self.intra_word_pos = intra_word_pos
+        cache_path = os.path.join(CACHE_PATH, f"phone/{self.mode}_times_durs.pkl")
+        if os.path.isfile(cache_path):
+            print(f"[PhoneDurationDataset] - loading cached {self.mode} times_durs from {cache_path}")
+            with open(cache_path, "rb") as f:
+                times_durs = pickle.load(f)
+        else:
+            times_durs = self.get_times_durs(self.dataset)
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            print(f"[PhoneDurationDataset] - saving cached {self.mode} times_durs to {cache_path}")
+            with open(cache_path, "wb") as f:
+                pickle.dump(times_durs, f)
+        # filter out examples with duration less than min_frame_size
+        self.times_durs = self.filter_short_durations(times_durs)
+
+        self.vocab_path = vocab_path
         self.get_vocab()
         self.phone_stress = ['NONE', '0', '1', '2']
 
@@ -91,22 +111,6 @@ class DurationDataset(Dataset):
         if self.mode == "train":
             print(f"[DurationDataset] - self.arpabet_phones: {self.arpabet_phones}")
 
-    def _get_h5_file(self):
-        if self.h5_file is None:
-            self.h5_file = h5py.File(self.h5_path, "r")
-        return self.h5_file
-    
-    def __len__(self):
-        return len(self.dataset)
-
-    def parse_words(self, tg):
-        word_tier = tg.getFirst("words")
-        times_words = [
-            (interval.minTime, interval.maxTime, interval.maxTime-interval.minTime, interval.mark.strip()) for interval in word_tier
-            if interval.mark.strip() != ""
-        ]
-        return times_words
-    
     def parse_phones(self, tg):
         phone_tier = tg.getFirst("phones")
         # times_phones = [
@@ -155,41 +159,6 @@ class DurationDataset(Dataset):
 
         return times_phones
     
-    def parse_syls(self, tg):
-        phone_tier = tg.getFirst("phones")
-        times_syls = []
-        times_phones = [
-            (interval.minTime, interval.maxTime, interval.mark.strip()) for interval in phone_tier
-        ]
-        vowel_idxs = [i for i, (_, _, phone) in enumerate(times_phones) if any([vowel in phone for vowel in 'AEIOU'])]
-        for i, vidx in enumerate(vowel_idxs):
-            syl = []
-            # syl start
-            if vidx == 0:
-                syl_start = times_phones[vidx][0]
-            elif i!=0 and vowel_idxs[i-1] == vidx-1:
-                # two adjacent vowels
-                syl_start = times_phones[vidx][0]
-            else:
-                # standard case - take center of previous phoneme
-                syl_start = (times_phones[vidx-1][0] + times_phones[vidx-1][1]) / 2.0
-                syl.append(times_phones[vidx-1][2])
-
-            syl.append(times_phones[vidx][2])
-
-            # syl end
-            if vidx == len(times_phones)-1:
-                syl_end = times_phones[vidx][1]
-            elif i!=len(vowel_idxs)-1 and vowel_idxs[i+1] == vidx+1:
-                # two adjacent vowels
-                syl_end = times_phones[vidx][1]
-            else:
-                # standard case - take center of next phoneme
-                syl_end = (times_phones[vidx+1][0] + times_phones[vidx+1][1]) / 2.0
-                syl.append(times_phones[vidx+1][2])
-            times_syls.append((syl_start, syl_end, syl_end-syl_start, syl))
-        return times_syls
-
     def get_times_durs(self, dataset):
         if self.mode == "train":
             align_dir = os.path.join(self.corpus_dir, f"alignments/{self.mode}_clean_100")
@@ -202,17 +171,11 @@ class DurationDataset(Dataset):
                 item+".TextGrid"
             )
             tg = textgrid.TextGrid.fromFile(align_path)
-            if self.dur_mode == "word":
-                times_durs = self.parse_words(tg)
-            elif self.dur_mode == "syl":
-                times_durs = self.parse_syls(tg)
-            elif self.dur_mode == "phone":
-                times_durs = self.parse_phones(tg)
-            all_times_durs.append(times_durs)
+            all_times_durs.append(self.parse_phones(tg))
         num_durs = [len(tds) for tds in all_times_durs]
-        print(f"[DurationDataset] - {len(all_times_durs)} files, number of {self.dur_mode}s: {min(num_durs)} ~ {max(num_durs)}, average: {sum(num_durs)/len(num_durs):.2f}")
+        print(f"[PhoneDurationDataset] - {len(all_times_durs)} files, number of phones: {min(num_durs)} ~ {max(num_durs)}, average: {sum(num_durs)/len(num_durs):.2f}")
         return all_times_durs
-            
+
     def collate_fn(self, samples):
         return zip(*samples)
     
@@ -232,16 +195,83 @@ class DurationDataset(Dataset):
         sts = [t[0] for t in times_durs]
         ets = [t[1] for t in times_durs]
         durs = [t[2] for t in times_durs]
-        if self.dur_mode == "phone":
-            phones = [t[3] if t[3] != '' else 'sil' for t in times_durs]
-            phones_wout_stress = [p.replace('0', '').replace('1', '').replace('2', '') for p in phones]
-            phones_idxs = [self.arpabet_phones.index(p) for p in phones_wout_stress]
-            stress = [p[-1] if p[-1] in '012' else 'NONE' for p in phones]
-            stress_idxs = [self.phone_stress.index(s) for s in stress]
-            if self.intra_word_pos:
-                intra_word_positions = [t[4] for t in times_durs]
-                word_lengths = [t[5] for t in times_durs]
-            else:
-                intra_word_positions = [0 for _ in phones]
-                word_lengths = [1 for _ in phones]
-            return wav, torch.tensor(sts), torch.tensor(ets), torch.tensor(durs), torch.tensor(phones_idxs), torch.tensor(stress_idxs), torch.tensor(intra_word_positions), torch.tensor(word_lengths)
+        
+        phones = [t[3] if t[3] != '' else 'sil' for t in times_durs]
+        phones_wout_stress = [p.replace('0', '').replace('1', '').replace('2', '') for p in phones]
+        phones_idxs = [self.arpabet_phones.index(p) for p in phones_wout_stress]
+        stress = [p[-1] if p[-1] in '012' else 'NONE' for p in phones]
+        stress_idxs = [self.phone_stress.index(s) for s in stress]
+        if self.intra_word_pos:
+            intra_word_positions = [t[4] for t in times_durs]
+            word_lengths = [t[5] for t in times_durs]
+        else:
+            intra_word_positions = [0 for _ in phones]
+            word_lengths = [1 for _ in phones]
+        return wav, torch.tensor(sts), torch.tensor(ets), torch.tensor(durs), torch.tensor(phones_idxs), torch.tensor(stress_idxs), torch.tensor(intra_word_positions), torch.tensor(word_lengths)
+        
+class WordDurationDataset(DurationDataset):
+    def __init__(self, mode, corpus_dir, meta_data_dir, glottal_kwargs, upstream_rate=160, use_spkr_embeds=False, **kwargs):
+        super().__init__(mode, corpus_dir, meta_data_dir, glottal_kwargs, upstream_rate=upstream_rate, use_spkr_embeds=use_spkr_embeds, **kwargs)
+        cache_path = os.path.join(CACHE_PATH, f"word/{self.mode}_times_durs.pkl")
+        if os.path.isfile(cache_path):
+            print(f"[WordDurationDataset] - loading cached {self.mode} times_durs from {cache_path}")
+            with open(cache_path, "rb") as f:
+                times_durs = pickle.load(f)
+        else:
+            times_durs = self.get_times_durs(self.dataset)
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            print(f"[WordDurationDataset] - saving cached {self.mode} times_durs to {cache_path}")
+            with open(cache_path, "wb") as f:
+                pickle.dump(times_durs, f)
+
+        # filter out examples with duration less than min_frame_size
+        self.times_durs = self.filter_short_durations(times_durs)
+
+    def get_times_durs(self, dataset):
+        if self.mode == "train":
+            align_dir = os.path.join(self.corpus_dir, f"alignments/{self.mode}_clean_100")
+        else:
+            align_dir = os.path.join(self.corpus_dir, f"alignments/{self.mode}_clean")
+        all_times_durs = []
+        for item in tqdm.tqdm(dataset, desc=f"loading {self.mode} alignments", total=len(dataset)):
+            align_path = os.path.join(
+                align_dir,
+                item+".TextGrid"
+            )
+            tg = textgrid.TextGrid.fromFile(align_path)
+            all_times_durs.append(self.parse_words(tg))
+        num_durs = [len(tds) for tds in all_times_durs]
+        print(f"[WordDurationDataset] - {len(all_times_durs)} files, number of words: {min(num_durs)} ~ {max(num_durs)}, average: {sum(num_durs)/len(num_durs):.2f}")
+        return all_times_durs
+
+    def parse_words(self, tg):
+        word_tier = tg.getFirst("words")
+        times_words = [
+            (interval.minTime, interval.maxTime, interval.maxTime-interval.minTime, interval.mark.strip().lower()) for interval in word_tier
+            if interval.mark.strip() != ""
+        ]
+        return times_words
+    
+    def collate_fn(self, samples):
+        return zip(*samples)
+
+    def __getitem__(self, idx):
+        path = self.dataset[idx]
+        h5_file = self._get_h5_file()
+        if h5_file is not None:
+            wav = h5_file[path][:]
+            # resample from 24000 to 16000
+            wav = librosa.resample(wav.astype(np.float32), orig_sr=LIBRITTSR_SR, target_sr=SAMPLE_RATE)
+            if self.return_glottal:
+                wav = self.glottal_extractor.extract(torch.from_numpy(wav), idx)
+        else:
+            raise NotImplementedError("H5 file is required for loading wav data since LibriTTS-R audios have been converted to .h5 format.")
+        
+        times_durs = self.times_durs[idx]
+        sts = [t[0] for t in times_durs]
+        ets = [t[1] for t in times_durs]
+        durs = [t[2] for t in times_durs]
+        words = " ".join([t[3] for t in times_durs])
+        words = words.replace("'", "").replace("_", "").replace("{", "").replace("}", "")
+
+        return wav, torch.tensor(sts), torch.tensor(ets), torch.tensor(durs), words, None, None, None # token_ids instead of words
